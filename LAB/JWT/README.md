@@ -666,3 +666,584 @@ https://attacker.com/malicious-keys
 ![alt text](image-19.png)
 
 ![alt text](image-20.png)
+
+
+
+
+
+
+
+
+
+
+# การโจมตีด้วยการสับสนอัลกอริทึม (Algorithm Confusion Attacks)
+
+การโจมตีด้วยการสับสนอัลกอริทึม (หรือที่เรียกว่า key confusion attacks) เกิดขึ้นเมื่อผู้โจมตีสามารถบังคับให้เซิร์ฟเวอร์ยืนยันลายเซ็นของ JSON Web Token (JWT) โดยใช้อัลกอริทึมที่แตกต่างจากที่นักพัฒนาเว็บไซต์ตั้งใจไว้ หากกรณีนี้ไม่ได้รับการจัดการอย่างเหมาะสม อาจทำให้ผู้โจมตีสามารถปลอมแปลง JWT ที่ถูกต้องซึ่งมีค่าข้อมูลตามใจชอบได้โดยไม่ต้องรู้รหัสลับสำหรับการเซ็นของเซิร์ฟเวอร์
+
+
+## ช่องโหว่การสับสนอัลกอริทึมเกิดขึ้นได้อย่างไร?
+
+ช่องโหว่การสับสนอัลกอริทึมมักเกิดจากการใช้งาน JWT libraries ที่บกพร่อง แม้ว่าขั้นตอนการยืนยันจริงจะแตกต่างกันตามอัลกอริทึมที่ใช้ แต่หลายๆ library ให้เมธอดเดียวที่ไม่เจาะจงอัลกอริทึมสำหรับการยืนยันลายเซ็น เมธอดเหล่านี้อาศัยพารามิเตอร์ `alg` ในส่วนหัวของโทเค็นเพื่อกำหนดประเภทของการยืนยันที่ควรดำเนินการ
+
+โค้ดจำลองต่อไปนี้แสดงตัวอย่างที่เรียบง่ายของการประกาศเมธอด `verify()` ทั่วไปในไลบรารี JWT:
+
+```javascript
+function verify(token, secretOrPublicKey){
+    algorithm = token.getAlgHeader();
+    if(algorithm == "RS256"){
+        // ใช้คีย์ที่ให้มาเป็น RSA public key
+    } else if (algorithm == "HS256"){
+        // ใช้คีย์ที่ให้มาเป็น HMAC secret key
+    }
+}
+```
+
+ปัญหาจะเกิดขึ้นเมื่อนักพัฒนาเว็บไซต์ที่ใช้เมธอดนี้สมมติว่าจะจัดการเฉพาะ JWT ที่เซ็นด้วยอัลกอริทึมแบบอสมมาตรเช่น RS256 เท่านั้น ด้วยการสมมติที่ผิดพลาดนี้ พวกเขาอาจส่งคีย์สาธารณะคงที่ไปยังเมธอดเสมอ:
+
+```javascript
+publicKey = <public-key-of-server>;
+token = request.getCookie("session");
+verify(token, publicKey);
+```
+
+ในกรณีนี้ หากเซิร์ฟเวอร์รับโทเค็นที่เซ็นด้วยอัลกอริทึมแบบสมมาตรเช่น HS256 เมธอด `verify()` ทั่วไปของไลบรารีจะถือว่าคีย์สาธารณะเป็น HMAC secret หมายความว่าผู้โจมตีสามารถเซ็นโทเค็นด้วย HS256 และคีย์สาธารณะ และเซิร์ฟเวอร์จะใช้คีย์สาธารณะเดียวกันนั้นเพื่อยืนยันลายเซ็น
+
+> **หมายเหตุ**: คีย์สาธารณะที่คุณใช้เซ็นโทเค็นต้องเหมือนกับคีย์สาธารณะที่เก็บไว้บนเซิร์ฟเวอร์ทุกประการ รวมถึงการใช้รูปแบบเดียวกัน (เช่น X.509 PEM) และรักษาอักขระที่ไม่สามารถพิมพ์ได้ เช่น newlines ในทางปฏิบัติ คุณอาจต้องทดลองกับการจัดรูปแบบต่างๆ เพื่อให้การโจมตีนี้ทำงานได้
+
+## การดำเนินการโจมตีด้วยการสับสนอัลกอริทึม
+
+การโจมตีด้วยการสับสนอัลกอริทึมโดยทั่วไปจะมีขั้นตอนหลักดังนี้:
+
+1. ขอคีย์สาธารณะของเซิร์ฟเวอร์
+2. แปลงคีย์สาธารณะให้อยู่ในรูปแบบที่เหมาะสม
+3. สร้าง JWT ที่เป็นอันตรายโดยแก้ไข payload และตั้งค่า alg header เป็น HS256
+4. เซ็นโทเค็นด้วย HS256 โดยใช้คีย์สาธารณะเป็น secret
+
+### ขั้นตอนที่ 1 - ขอคีย์สาธารณะของเซิร์ฟเวอร์
+
+บางครั้งเซิร์ฟเวอร์เปิดเผยคีย์สาธารณะเป็นออบเจ็กต์ JSON Web Key (JWK) ผ่าน endpoint มาตรฐานที่แมปไปยัง `/jwks.json` หรือ `/.well-known/jwks.json` เป็นต้น สิ่งเหล่านี้อาจถูกเก็บไว้ในอาร์เรย์ของ JWKs ที่เรียกว่า keys ซึ่งเรียกว่า JWK Set
+
+```json
+{
+    "keys": [
+        {
+            "kty": "RSA",
+            "e": "AQAB",
+            "kid": "75d0ef47-af89-47a9-9061-7c02a610d5ab",
+            "n": "o-yy1wpYmffgXBxhAUJzHHocCuJolwDqql75ZWuCQ_cb33K2vh9mk6GPM9gNN4Y_qTVX67WhsN3JvaFYw-fhvsWQ"
+        }
+    ]
+}
+```
+
+แม้ว่าคีย์จะไม่ได้เปิดเผยต่อสาธารณะ คุณอาจสามารถดึงมันออกมาจาก JWT คู่ที่มีอยู่ได้
+
+### ขั้นตอนที่ 2 - แปลงคีย์สาธารณะให้อยู่ในรูปแบบที่เหมาะสม
+
+แม้ว่าเซิร์ฟเวอร์อาจเปิดเผยคีย์สาธารณะในรูปแบบ JWK แต่เมื่อยืนยันลายเซ็นของโทเค็น มันจะใช้สำเนาคีย์ของตนเองจากระบบไฟล์ท้องถิ่นหรือฐานข้อมูล ซึ่งอาจถูกเก็บในรูปแบบที่แตกต่างกัน
+
+เพื่อให้การโจมตีทำงานได้ เวอร์ชันของคีย์ที่คุณใช้เซ็น JWT ต้องเหมือนกับสำเนาท้องถิ่นของเซิร์ฟเวอร์ทุกประการ นอกจากจะอยู่ในรูปแบบเดียวกันแล้ว ทุกไบต์ต้องตรงกัน รวมถึงอักขระที่ไม่สามารถพิมพ์ได้
+
+สำหรับตัวอย่างนี้ สมมติว่าเราต้องการคีย์ในรูปแบบ X.509 PEM
+
+### ขั้นตอนที่ 3 - แก้ไข JWT ของคุณ
+
+เมื่อคุณมีคีย์สาธารณะในรูปแบบที่เหมาะสมแล้ว คุณสามารถแก้ไข JWT ตามที่ต้องการ เพียงแค่ตรวจสอบให้แน่ใจว่า alg header ถูกตั้งค่าเป็น HS256
+
+### ขั้นตอนที่ 4 - เซ็น JWT โดยใช้คีย์สาธารณะ
+
+เซ็นโทเค็นโดยใช้อัลกอริทึม HS256 ด้วยคีย์สาธารณะ RSA เป็น secret
+
+
+
+## PEM (Privacy-Enhanced Mail)
+
+**PEM** เป็นรูปแบบการเข้ารหัสแบบ Base64 ที่ใช้เก็บและส่งข้อมูลการเข้ารหัส โดยเฉพาะใบรับรองและคีย์
+
+### ลักษณะของ PEM:
+```
+-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA4f5wg5l2hKsTeNem/V41
+fGnJm6gOdrj8ym3rFkEjWT2BTnqKjWnEyH2Lym/wKW0nUyAYjmR1P3XY+fKQ8Ufr
+...
+-----END PUBLIC KEY-----
+```
+
+### ประเภทของ PEM:
+- **X.509 PEM**: รูปแบบมาตรฐานสำหรับใบรับรองและคีย์สาธารณะ
+- **PKCS#1 PEM**: รูปแบบเฉพาะสำหรับ RSA keys
+- **PKCS#8 PEM**: รูปแบบทั่วไปสำหรับคีย์ส่วนตัว
+
+### ตัวอย่าง Headers:
+```
+-----BEGIN PUBLIC KEY-----          (X.509)
+-----BEGIN RSA PUBLIC KEY-----      (PKCS#1)
+-----BEGIN PRIVATE KEY-----         (PKCS#8)
+-----BEGIN RSA PRIVATE KEY-----     (PKCS#1 private)
+-----BEGIN CERTIFICATE-----         (X.509 Certificate)
+```
+
+---
+
+## JWK (JSON Web Key)
+
+**JWK** เป็นรูปแบบ JSON สำหรับแสดงคีย์การเข้ารหัส ออกแบบมาเพื่อใช้ในบริบทของ web
+
+### ตัวอย่าง JWK (RSA Public Key):
+```json
+{
+  "kty": "RSA",
+  "use": "sig",
+  "kid": "75d0ef47-af89-47a9-9061-7c02a610d5ab",
+  "n": "o-yy1wpYmffgXBxhAUJzHHocCuJolwDqql75ZWuCQ_cb33K2vh9mk6GPM9gNN4Y_qTVX67WhsN3JvaFYw-fhvsWQ",
+  "e": "AQAB"
+}
+```
+
+### พารามิเตอร์หลักของ JWK:
+- **`kty`** (Key Type): ประเภทของคีย์ (RSA, EC, oct)
+- **`use`** (Public Key Use): การใช้งาน (sig=signature, enc=encryption)
+- **`kid`** (Key ID): ตัวระบุคีย์เฉพาะ
+- **`n`** (Modulus): ค่า modulus ของ RSA (Base64URL-encoded)
+- **`e`** (Exponent): ค่า exponent ของ RSA (Base64URL-encoded)
+- **`alg`** (Algorithm): อัลกอริทึมที่ใช้
+
+### JWK Set:
+```json
+{
+  "keys": [
+    {
+      "kty": "RSA",
+      "kid": "key1",
+      "n": "...",
+      "e": "AQAB"
+    },
+    {
+      "kty": "RSA", 
+      "kid": "key2",
+      "n": "...",
+      "e": "AQAB"
+    }
+  ]
+}
+```
+
+---
+
+## การแปลงระหว่าง PEM และ JWK
+
+### JWK → PEM (ใช้ Burp Suite JWT Editor):
+1. ไปที่ JWT Editor Keys tab
+2. คลิก "New RSA Key"
+3. วาง JWK ที่ได้มา
+4. เลือก PEM radio button
+5. คัดลอก PEM key ที่ได้
+
+
+
+## **ปกติ RSA ทำงานอย่างไร**
+
+### **RSA (RS256) - Asymmetric:**
+```
+เซ็น: sign(data, private_key) → signature
+ยืนยัน: verify(data, signature, public_key) → true/false
+```
+
+- **เซ็น**: ใช้ private key เท่านั้น
+- **ยืนยัน**: ใช้ public key เท่านั้น
+- คุณ**ไม่สามารถ**เซ็นด้วย public key ได้ในระบบ RSA
+
+## **แต่ HMAC ทำงานต่างออกไป**
+
+### **HMAC (HS256) - Symmetric:**
+```
+เซ็น: HMAC(data, secret_key) → signature  
+ยืนยัน: HMAC(data, secret_key) → signature แล้วเปรียบเทียบ
+```
+
+- **ทั้งเซ็นและยืนยัน**: ใช้ key เดียวกัน
+- **Key อะไรก็ได้**: ไม่จำเป็นต้องเป็น "cryptographic key" แบบพิเศษ
+- **แม้แต่ string ธรรมดา**: เช่น "hello" ก็เซ็นได้
+
+## **ปัญหาเกิดขึ้นที่ไหน?**
+
+เมื่อเซิร์ฟเวอร์มีโค้ดแบบนี้:
+```javascript
+function verify(token, key) {
+    algorithm = token.getAlgHeader(); // อ่านจาก JWT header
+    
+    if(algorithm == "RS256") {
+        // ใช้ key เป็น RSA public key
+        return RSA_verify(token, key);
+    } 
+    else if (algorithm == "HS256") {
+        // ใช้ key เป็น HMAC secret (ไม่ว่าจะเป็นอะไรก็ได้!)
+        return HMAC_verify(token, key);
+    }
+}
+
+// เซิร์ฟเวอร์เรียกใช้
+publicKey = "-----BEGIN PUBLIC KEY-----\nMIIBIjAN...";
+verify(token, publicKey); // ส่ง public key เข้าไป
+```
+
+## **การโจมตี:**
+
+### **ขั้นตอนที่ 1 - การหลอกลวง:**
+- เราสร้าง JWT โดยตั้ง `alg: "HS256"`
+- เซิร์ฟเวอร์อ่าน header แล้วคิดว่าต้องใช้ HMAC
+- เซิร์ฟเวอร์เอา public key ไปใช้เป็น HMAC secret
+
+### **ขั้นตอนที่ 2 - การเซ็น:**
+```javascript
+// เราทำในเครื่องเรา:
+publicKeyString = "-----BEGIN PUBLIC KEY-----\nMIIBIjAN...";
+maliciousJWT = HMAC_sign(payload, publicKeyString);
+```
+
+### **ขั้นตอนที่ 3 - การยืนยัน:**
+```javascript
+// เซิร์ฟเวอร์ทำ:
+publicKeyString = "-----BEGIN PUBLIC KEY-----\nMIIBIjAN..."; // เดียวกัน!
+isValid = HMAC_verify(maliciousJWT, publicKeyString); // ✅ ผ่าน!
+```
+
+## **สาเหตุที่ได้ผล:**
+
+1. **HMAC ไม่สนใจว่า "secret" จะเป็นอะไร** - แม้แต่ public key ก็ใช้ได้
+2. **เราและเซิร์ฟเวอร์ใช้ "secret" เดียวกัน** (public key)
+3. **เซิร์ฟเวอร์เชื่อ algorithm ใน JWT header** แทนที่จะบังคับใช้ RS256
+
+## **ทำไมไม่ใช่ RSA:**
+
+ถ้าเราพยายามเซ็นด้วย public key ในระบบ RSA:
+```javascript
+// ❌ ไม่ได้ผล
+RSA_sign(data, public_key); // Error: Cannot sign with public key
+```
+
+แต่ใน HMAC:
+```javascript
+// ✅ ได้ผล
+HMAC(data, "anything-can-be-secret"); 
+HMAC(data, public_key_string); // public key เป็นแค่ string
+```
+
+
+
+
+![alt text](image-22.png)
+
+## **สถานการณ์ในโจทย์:**
+
+### **ระบบปกติ (ที่นักพัฒนาตั้งใจ):**
+- ใช้ **RSA key pair** (RS256)
+- **Private key**: เซิร์ฟเวอร์ใช้เซ็น JWT
+- **Public key**: เซิร์ฟเวอร์ใช้ verify JWT
+- Public key เผยแพร่ผ่าน standard endpoint
+
+### **ข้อบกพร่องในการใช้งาน:**
+- โค้ดไม่ได้ **บังคับใช้ algorithm**
+- อ่านค่า `alg` จาก JWT header แล้วตัดสินใจ
+- หาก `alg = "HS256"` → ใช้ **public key เป็น HMAC secret**
+
+## **การโจมตี Algorithm Confusion:**
+
+### **ขั้นตอนการโจมตี:**
+1. **ดาวน์โหลด public key** จาก endpoint ที่เปิดเผย
+2. **แปลง public key** ให้เป็นรูปแบบที่เหมาะสม
+3. **สร้าง JWT ใหม่** โดยเปลี่ยน:
+   - `alg: "HS256"` (แทน RS256)
+   - `sub: "administrator"` (แทน wiener)
+4. **เซ็น JWT ด้วย HMAC** โดยใช้ public key เป็น secret
+5. **ส่ง JWT ไปยังเซิร์ฟเวอร์**
+
+### **สิ่งที่เกิดขึ้นบนเซิร์ฟเวอร์:**
+```javascript
+// เซิร์ฟเวอร์มีโค้ดประมาณนี้ (บกพร่อง)
+function verify(token, publicKey) {
+    algorithm = token.getAlgHeader(); // อ่านจาก JWT
+    
+    if (algorithm == "RS256") {
+        return RSA_verify(token, publicKey); // ปกติ
+    } 
+    else if (algorithm == "HS256") {
+        return HMAC_verify(token, publicKey); // ❌ ใช้ public key เป็น secret!
+    }
+}
+```
+
+## **ทำไมถึงได้ผล:**
+
+### **ปกติ (RS256):**
+```
+เซิร์ฟเวอร์: verify(JWT, public_key) ใช้ RSA algorithm
+ผู้โจมตี: ไม่สามารถปลอมแปลงได้ (ไม่มี private key)
+```
+
+### **การโจมตี (HS256):**
+```
+ผู้โจมตี: sign(fake_JWT, public_key) ใช้ HMAC algorithm
+เซิร์ฟเวอร์: verify(fake_JWT, public_key) ใช้ HMAC algorithm
+ผลลัพธ์: ✅ ผ่าน! (เพราะใช้ key เดียวกัน)
+```
+
+## **ความผิดพลาดหลัก:**
+
+1. **ไว้วางใจ JWT header**: เซิร์ฟเวอร์ปล่อยให้ผู้ใช้เลือก algorithm
+2. **ใช้ public key ผิดวัตถุประสงค์**: นำมาใช้เป็น HMAC secret
+3. **ไม่มีการ validate algorithm**: ไม่บังคับให้ใช้ RS256 เท่านั้น
+
+
+ดังนั้นในโจทย์นี้ เราจะ**หลอก**ให้เซิร์ฟเวอร์ใช้ public key เป็น HMAC secret แทนที่จะใช้เป็น RSA public key ตามที่ออกแบบไว้!
+
+
+![alt text](image-21.png)
+
+
+![alt text](image-23.png)
+
+![alt text](image-24.png)
+
+![alt text](image-25.png)
+
+![alt text](image-26.png)
+
+
+
+
+
+
+
+
+
+
+
+## การหาคีย์สาธารณะจาก Token ที่มีอยู่
+
+ในกรณีที่คีย์สาธารณะไม่พร้อมใช้งาน คุณยังสามารถทดสอบการสับสนอัลกอริทึมได้โดยการหาคีย์จาก JWT คู่ที่มีอยู่ กระบวนการนี้ค่อนข้างง่ายโดยใช้เครื่องมือเช่น jwt_forgery.py
+
+เราได้สร้างเวอร์ชันที่เรียบง่ายของเครื่องมือนี้ซึ่งคุณสามารถเรียกใช้ด้วยคำสั่งเดียว:
+
+```bash
+docker run --rm -it portswigger/sig2n <token1> <token2>
+```
+
+> **หมายเหตุ**: คุณต้องมี Docker CLI เพื่อเรียกใช้เครื่องมือนี้ ครั้งแรกที่คุณเรียกใช้คำสั่งนี้ มันจะดึง image จาก Docker Hub โดยอัตโนมัติ ซึ่งอาจใช้เวลาสองสามนาที
+
+เครื่องมือนี้ใช้ JWT ที่คุณให้มาเพื่อคำนวณค่าที่เป็นไปได้อย่างน้อยหนึ่งค่าของ n โดยจะแสดงผลลัพธ์สำหรับแต่ละค่าที่เป็นไปได้:
+
+- คีย์ PEM แบบ Base64-encoded ทั้งในรูปแบบ X.509 และ PKCS1
+- JWT ที่ปลอมแปลงซึ่งเซ็นโดยใช้คีย์เหล่านี้
+
+เพื่อระบุคีย์ที่ถูกต้อง ให้ใช้ Burp Repeater ส่งคำขอที่มี JWT ที่ปลอมแปลงแต่ละตัว เฉพาะตัวเดียวเท่านั้นที่เซิร์ฟเวอร์จะยอมรับ จากนั้นคุณสามารถใช้คีย์ที่ตรงกันเพื่อสร้างการโจมตีด้วยการสับสนอัลกอริทึมได้
+
+
+![alt text](image-27.png)
+
+คำสั่ง `docker run --rm -it portswigger/sig2n <token1> <token2>` ทำงานโดยใช้การคำนวณทางคณิตศาสตร์เพื่อหาคีย์สาธารณะ RSA จาก JWT สองตัว 
+
+## วิธีการทำงานของเครื่องมือ
+
+### 1. **หลักการพื้นฐาน**
+เครื่องมือนี้ใช้ช่องโหว่ในการใช้งาน RSA signature ที่เรียกว่า **"Same message, different signatures"** attack
+
+### 2. **การคำนวณทางคณิตศาสตร์**
+
+```
+RSA Signature Formula:
+s = m^d mod n
+
+โดยที่:
+- s = signature
+- m = message (hashed)  
+- d = private key
+- n = modulus (ส่วนหนึ่งของ public key)
+```
+
+### 3. **ขั้นตอนการทำงาน**
+
+#### **Step 1: แยกข้อมูลจาก JWT**
+```bash
+# JWT Structure: header.payload.signature
+# เครื่องมือจะ:
+- แยก header และ payload ของทั้งสอง token
+- แยก signature ของทั้งสอง token  
+- คำนวณ hash ของ message (header.payload)
+```
+
+#### **Step 2: ใช้ GCD Algorithm**
+```python
+# Simplified version of what happens:
+signature1 = JWT1_signature
+signature2 = JWT2_signature
+message1 = hash(JWT1_header + "." + JWT1_payload)
+message2 = hash(JWT2_header + "." + JWT2_payload)
+
+# หาค่า n โดยใช้ Greatest Common Divisor
+n_candidates = []
+for possible_n in calculate_possible_n_values(signature1, signature2, message1, message2):
+    n_candidates.append(possible_n)
+```
+
+#### **Step 3: คำนวณ Public Key**
+สำหรับแต่ละค่า n ที่เป็นไปได้:
+```python
+# สร้าง RSA public key
+e = 65537  # Standard RSA exponent
+public_key = RSA.construct((n, e))
+
+# แปลงเป็นรูปแบบต่างๆ
+x509_pem = convert_to_x509_pem(public_key)
+pkcs1_pem = convert_to_pkcs1_pem(public_key)
+```
+
+
+
+### **1. RSA Vulnerability**
+- หาก RSA implementation ไม่ดี อาจใช้ random number ที่ไม่แข็งแรง
+- การใช้ same private key หลายครั้งอาจเผยข้อมูล
+
+### **2. Mathematical Relationship**
+```
+ถ้า: signature1 = message1^d mod n
+และ: signature2 = message2^d mod n
+
+เราสามารถใช้ GCD และ Extended Euclidean Algorithm 
+เพื่อหาค่า n ได้ในบางกรณี
+```
+
+### **3. Weak Randomness**
+หากเซิร์ฟเวอร์ใช้:
+- Weak random number generator
+- Same nonce หลายครั้ง  
+- Predictable padding
+
+## ข้อจำกัด
+
+### **จำเป็นต้องมี:**
+- JWT อย่างน้อย 2 ตัวจากเซิร์ฟเวอร์เดียวกัน
+- เซิร์ฟเวอร์ต้องมีช่องโหว่ในการใช้งาน RSA
+- JWT ต้องเซ็นด้วย RSA algorithm (RS256, RS384, RS512)
+
+### **ไม่ทำงานเมื่อ:**
+- RSA implementation ถูกต้องและปลอดภัย
+- ใช้ strong random number generation
+- ใช้ proper padding schemes
+
+
+
+## โครงสร้างของ Output
+
+### **หัวข้อหลัก**
+```
+Found n with multiplier 1:
+```
+- **n** = modulus ของ RSA public key ที่เครื่องมือคำนวณได้
+- **multiplier 1** = ค่าตัวคูณที่ใช้ในการคำนวณ (อาจมีหลายค่า เช่น multiplier 2, 3 ถ้ามีความเป็นไปได้หลายแบบ)
+
+---
+
+## ส่วนที่ 1: X.509 Format
+
+### **Base64 encoded x509 key:**
+```
+LS0tLS1CRUdJTiBQVUJMSUMgS0VZLS0tLS0KTUlJQklqQU5CZ2txaGtpRzl3MEJBUUVGQUFPQ0FROEFNSUlCQ2dLQ0FRRUE2STVhQjNPS3pOc01nN0xNbGRxZgpnTXdaWWRZVm5zRGU4NVJZUDVJTU5GZy9INi9OeXZlZXNQbGNSOXQ5RFBwZUlVZTdUZ2VOcmFiTjVlNWQ2ZTNoClB6eXJlUUwvNnMyU2hrRzg3bmo3Q3JrUThZRnlVczlnTTkwUENBRUNkTE5vdGJvU0pGaWczYjN3NHY3eWY4R3QKK0xrYS9USVc2elJXbTE4ZXorcEdBSkdKVVZGTE1uUzVsSlF4Sm84Z2VoK1JoNm5JSXdMTGxXTzBPNy9QUFk0ZAo5YmEreTd1dHkvZ3VOL1V3MzZXWjEzSDAxaDhOV08xM0dTY0hpOWdIc2UySUhVRzhkSFJLLzh0YWkrU1NIQ0ZsCnZwTVZxZ1k0RGhsclZyMHFuMkhWam1hSVU1VkV1SkRlNkNTWjBoRG40OGlUdXIyVVFtR1IwT3FremVZVWhIU0kKdndJREFRQUIKLS0tLS1FTkQgUFVCTElDIEtFWS0tLS0tCg==
+```
+
+**คืออะไร:**
+- RSA public key ในรูปแบบ X.509 PEM ที่ encode เป็น Base64
+- X.509 เป็นมาตรฐานสำหรับ digital certificates และ public key infrastructure
+
+**ถ้า decode จะได้:**
+```
+-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA6I5aB3OKzNsMg7LMldqf
+gMwZYdYVnsDe85RYP5IMNFg/H6/NyveesPlcR9t9DPpeIUe7TgeNrabN5e5d6e3h
+PzyreQL/6s2ShkG87nj7CrkQ8YFyUs9gM90PCAECdLNotboSJFig3b3w4v7yf8Gt
++Lka/TIW6zRWm18ez+pGAJGJUVFLMnS5lJQxJo8geh+Rh6nIIwLLlWO0O7/PPY4d
+9ba+y7uty/guN/Uw36WZ13H01h8NWO13GScHi9gHse2IHUG8dHRK/8tai+SSHCFl
+vpMVqgY4DhlrVr0qn2HVjmaIU5VEuJDe6CSZ0hDn48iTur2UQmGR0OqkzeYUhHSI
+vwIDAQAB
+-----END PUBLIC KEY-----
+```
+
+### **Tampered JWT สำหรับ X.509:**
+```
+eyJraWQiOiI5NzEyMDU0ZS0wYzFjLTQwYjYtODIyZS04ZGRjOTMwZTkxNzciLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiAicG9ydHN3aWdnZXIiLCAiZXhwIjogMTc1ODI0NTAxMiwgInN1YiI6ICJ3aWVuZXIifQ.UKiyIcd_CADwhf5chjzWpdK7G1PxC3llbNWbquUSpuA
+```
+
+**ถ้า decode header:**
+```json
+{
+  "kid": "971254e-0c1c-40b6-822e-8ddc930e9177",
+  "alg": "HS256"
+}
+```
+
+**ถ้า decode payload:**
+```json
+{
+  "iss": "portswigger",
+  "exp": 1758245012,
+  "sub": "wiener"
+}
+```
+
+---
+
+## ส่วนที่ 2: PKCS1 Format
+
+### **Base64 encoded pkcs1 key:**
+```
+LS0tLS1CRUdJTiBSU0EgUFVCTElDIEtFWS0tLS0tCk1JSUJDZ0tDQVFFQTZJNWFCM09Lek5zTWc3TE1sZHFmZ013WllkWVZuc0RlODVSWVA1SU1ORmcvSDYvTnl2ZWUKc1BsY1I5dDlEUHBlSVVlN1RnZU5yYWJONWU1ZDZlM2hQenlyZVFMLzZzMlNoa0c4N25qN0Nya1E4WUZ5VXM5ZwpNOTBQQ0FFQ2RMTm90Ym9TSkZpZzNiM3c0djd5ZjhHdCtMa2EvVElXNnpSV20xOGV6K3BHQUpHSlVWRkxNblM1CmxKUXhKbzhnZWgrUmg2bklJd0xMbFdPME83L1BQWTRkOWJhK3k3dXR5L2d1Ti9VdzM2V1oxM0gwMWg4TldPMTMKR1NjSGk5Z0hzZTJJSFVHOGRIUksvOHRhaStTU0hDRmx2cE1WcWdZNERobHJWcjBxbjJIVmptYUlVNVZFdUpEZQo2Q1NaMGhEbjQ4aVR1cjJVUW1HUjBPcWt6ZVlVaEhTSXZ3SURBUUFCCi0tLS0tRU5EIFJTQSBQVUJMSUMgS0VZLS0tLS0K
+```
+
+**คืออะไร:**
+- RSA public key เดียวกัน แต่ในรูปแบบ PKCS#1 PEM
+
+**ถ้า decode จะได้:**
+```
+-----BEGIN RSA PUBLIC KEY-----
+MIIBCgKCAQEA6I5aB3OKzNsMg7LMldqfgMwZYdYVnsDe85RYP5IMNFg/H6/Nyve
+esPlcR9t9DPpeIUe7TgeNrabN5e5d6e3hPzyreQL/6s2ShkG87nj7CrkQ8YFyUs9g
+M90PCAECdLNotboSJFig3b3w4v7yf8Gt+Lka/TIW6zRWm18ez+pGAJGJUVFLMnS5
+lJQxJo8geh+Rh6nIIwLLlWO0O7/PPY4d9ba+y7uty/guN/Uw36WZ13H01h8NWO13
+GScHi9gHse2IHUG8dHRK/8tai+SSHCFlvpMVqgY4DhlrVr0qn2HVjmaIU5VEuJDe
+6CSZ0hDn48iTur2UQmGR0OqkzeYUhHSIvwIDAQAB
+-----END RSA PUBLIC KEY-----
+```
+
+
+## ความแตกต่างระหว่าง X.509 และ PKCS1
+
+| รูปแบบ | การใช้งาน | ขนาด | รูปแบบ Header |
+|--------|-----------|------|---------------|
+| **X.509** | มาตรฐาน PKI, certificates | ใหญ่กว่า | `-----BEGIN PUBLIC KEY-----` |
+| **PKCS#1** | RSA เฉพาะ | เล็กกว่า | `-----BEGIN RSA PUBLIC KEY-----` |
+
+---
+
+
+
+### **สร้าง Symmetric Key:**
+เมื่อรู้แล้วว่าคีย์ไหนถูกต้อง:
+- คัดลอก **Base64 encoded key** (ไม่ใช่ JWT)
+- ใช้สร้าง symmetric key ใน Burp JWT Editor
+- แก้ไข payload เป็น `"sub": "administrator"`
+- เซ็นใหม่ด้วย HS256
+
+---
+
+## สาเหตุที่มี 2 รูปแบบ
+
+เซิร์ฟเวอร์อาจเก็บคีย์ในรูปแบบใดรูปแบบหนึ่ง เครื่องมือจึงให้ทั้งสองรูปแบบเพื่อให้ทดสอบได้ว่ารูปแบบไหนที่เซิร์ฟเวอร์ใช้จริง
+
+
+
+![alt text](image-28.png)
+
+
+![alt text](image-29.png)
+
+![alt text](image-30.png)
