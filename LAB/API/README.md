@@ -190,15 +190,249 @@ Mass assignment (หรือที่เรียกว่า auto-binding) อ
 
 
 
-## การป้องกันช่องโหว่ใน API
+# การปนเปื้อนพารามิเตอร์ฝั่งเซิร์ฟเวอร์ (Server-side Parameter Pollution)
 
-เมื่อออกแบบ API ให้แน่ใจว่าความปลอดภัยเป็นข้อพิจารณาตั้งแต่เริ่มต้น โดยเฉพาะ ให้แน่ใจว่าคุณ:
+บางระบบมี internal API ที่ไม่สามารถเข้าถึงได้โดยตรงจากอินเทอร์เน็ต การปนเปื้อนพารามิเตอร์ฝั่งเซิร์ฟเวอร์เกิดขึ้นเมื่อเว็บไซต์เอา input ของผู้ใช้ไปแทรกในคำขอฝั่งเซิร์ฟเวอร์ไปยัง internal API โดยไม่ได้ encode อย่างเหมาะสม หมายความว่าผู้โจมตีอาจจะสามารถจัดการหรือแทรกพารามิเตอร์ได้ ซึ่งจะทำให้พวกเขาสามารถ:
 
-- รักษาความปลอดภัยเอกสารของคุณหากคุณไม่ต้องการให้ API ของคุณเข้าถึงได้สาธารณะ
-- ให้แน่ใจว่าเอกสารของคุณได้รับการอัปเดตเพื่อให้ผู้ทดสอบที่ถูกกฎหมายมีทัศนวิสัยเต็มรูปแบบของพื้นผิวการโจมตีของ API
-- ใช้รายการอนุญาตของเมธอด HTTP ที่อนุญาต
-- ตรวจสอบว่าประเภทเนื้อหาตรงกับที่คาดหวังสำหรับแต่ละคำขอหรือการตอบสนอง
-- ใช้ข้อความแสดงข้อผิดพลาดทั่วไปเพื่อหลีกเลี่ยงการให้ข้อมูลที่อาจเป็นประโยชน์สำหรับผู้โจมตี
-- ใช้มาตรการป้องกันในทุกเวอร์ชันของ API ไม่ใช่เพียงเวอร์ชันการผลิตปัจจุบัน
+- Override พารามิเตอร์เดิมที่มีอยู่
+- เปลี่ยนพฤติกรรมของแอปพลิเคชัน
+- เข้าถึงข้อมูลที่ไม่ได้รับอนุญาต
 
-เพื่อป้องกันช่องโหว่ mass assignment ให้สร้างรายการอนุญาตของคุณสมบัติที่สามารถอัปเดตโดยผู้ใช้ และสร้างรายการบล็อกของคุณสมบัติที่ไวต่อการโจมตีที่ไม่ควรอัปเดตโดยผู้ใช้
+คุณสามารถทดสอบ user input ใดๆ หาการปนเปื้อนพารามิเตอร์ได้ เช่น query parameters, form fields, headers, และ URL path parameters ต่างๆ อาจจะมีช่องโหว่ได้หมด
+
+**หมายเหตุ:** ช่องโหว่นี้บางครั้งเรียกว่า HTTP parameter pollution แต่คำนี้ยังใช้เรียกเทคนิคการหลบหลีก web application firewall (WAF) อีกด้วย เพื่อไม่ให้สับสน ในหัวข้อนี้เราจะเรียกเฉพาะการปนเปื้อนพารามิเตอร์ฝั่งเซิร์ฟเวอร์
+
+อีกอย่าง แม้ว่าจะมีชื่อคล้ายกัน แต่ช่องโหว่นี้ไม่เกี่ยวข้องกับ server-side prototype pollution เลย
+
+## การทดสอบการปนเปื้อนพารามิเตอร์ฝั่งเซิร์ฟเวอร์ใน Query String
+
+ในการทดสอบการปนเปื้อนพารามิเตอร์ฝั่งเซิร์ฟเวอร์ใน query string ให้ใส่ตัวอักษร query syntax เช่น `#`, `&`, และ `=` ใน input ของคุณ แล้วดูว่าแอปพลิเคชันตอบสนองยังไง
+
+ลองดูแอปพลิเคชันที่มีช่องโหว่ที่ให้คุณค้นหาผู้ใช้คนอื่นๆ ตาม username ของพวกเขา เวลาคุณค้นหาผู้ใช้ browser ของคุณจะส่ง request แบบนี้:
+
+```
+GET /userSearch?name=peter&back=/home
+```
+
+เพื่อดึงข้อมูลผู้ใช้ เซิร์ฟเวอร์จะ query internal API ด้วย request นี้:
+
+```
+GET /users/search?name=peter&publicProfile=true
+```
+
+### การตัดทอน Query Strings
+
+คุณสามารถใช้ตัวอักษร `#` ที่ URL-encoded เพื่อลองตัดทอน server-side request เพื่อช่วยให้คุณเข้าใจ response ได้ คุณยังสามารถเพิ่ม string หลัง `#` ได้ด้วย
+
+ตัวอย่าง คุณสามารถแก้ query string เป็น:
+
+```
+GET /userSearch?name=peter%23foo&back=/home
+```
+
+front-end จะพยายามเข้าถึง URL นี้:
+
+```
+GET /users/search?name=peter#foo&publicProfile=true
+```
+
+**หมายเหตุ:** สำคัญมากที่คุณต้อง URL-encode ตัวอักษร `#` มิฉะนั้น front-end application จะเข้าใจว่าเป็น fragment identifier และจะไม่ส่งไปยัง internal API
+
+ดู response หาเบาะแสว่า query ถูกตัดทอนรึเปล่า เช่น ถ้า response return ผู้ใช้ peter แสดงว่า server-side query อาจจะถูกตัดทอน ถ้าแสดง error message "Invalid name" แสดงว่าแอปพลิเคชันอาจจะเอา foo เป็นส่วนหนึ่งของ username ซึ่งบอกว่า server-side request อาจจะไม่ถูกตัดทอน
+
+ถ้าคุณสามารถตัดทอน server-side request ได้ นี่จะเอาข้อกำหนดที่ `publicProfile` field ต้องเป็น true ออกไป คุณอาจจะใช้ช่องโหว่นี้เพื่อ return โปรไฟล์ผู้ใช้ที่ไม่เป็น public ได้
+
+### การแทรกพารามิเตอร์ที่ไม่ถูกต้อง
+
+คุณสามารถใช้ตัวอักษร `&` ที่ URL-encoded เพื่อลองเพิ่มพารามิเตอร์ที่สองใน server-side request
+
+ตัวอย่าง คุณสามารถแก้ query string เป็น:
+
+```
+GET /userSearch?name=peter%26foo=xyz&back=/home
+```
+
+นี่จะ result ใน server-side request นี้ไปยัง internal API:
+
+```
+GET /users/search?name=peter&foo=xyz&publicProfile=true
+```
+
+ดู response หาเบาะแสว่าพารามิเตอร์เพิ่มเติมถูก parse ยังไง เช่น ถ้า response ไม่เปลี่ยน อาจจะบอกว่าพารามิเตอร์ถูก inject สำเร็จแต่ถูกแอปพลิเคชันละเลย
+
+เพื่อให้เห็นภาพครบถ้วนมากขึ้น คุณจะต้องทดสอบต่อไป
+
+### การแทรกพารามิเตอร์ที่ถูกต้อง
+
+ถ้าคุณสามารถแก้ไข query string ได้ คุณก็สามารถลองเพิ่มพารามิเตอร์ที่ถูกต้องที่สองใน server-side request
+
+ตัวอย่าง ถ้าคุณระบุพารามิเตอร์ `email` ได้ คุณสามารถเพิ่มลงใน query string แบบนี้:
+
+```
+GET /userSearch?name=peter%26email=foo&back=/home
+```
+
+นี่จะ result ใน server-side request นี้ไปยัง internal API:
+
+```
+GET /users/search?name=peter&email=foo&publicProfile=true
+```
+
+ดู response หาเบาะแสว่าพารามิเตอร์เพิ่มเติมถูก parse ยังไง
+
+### การ Override พารามิเตอร์เดิม
+
+เพื่อยืนยันว่าแอปพลิเคชันมีช่องโหว่ต่อการปนเปื้อนพารามิเตอร์ฝั่งเซิร์ฟเวอร์ คุณสามารถลอง override พารามิเตอร์เดิม ทำโดยการ inject พารามิเตอร์ที่สองที่มีชื่อเดียวกัน
+
+ตัวอย่าง คุณสามารถแก้ query string เป็น:
+
+```
+GET /userSearch?name=peter%26name=carlos&back=/home
+```
+
+นี่จะ result ใน server-side request นี้ไปยัง internal API:
+
+```
+GET /users/search?name=peter&name=carlos&publicProfile=true
+```
+
+internal API จะแปลความพารามิเตอร์ `name` สองตัว impact ของเรื่องนี้ขึ้นอยู่กับว่าแอปพลิเคชันประมวลผลพารามิเตอร์ตัวที่สองยังไง นี่จะแตกต่างกันไปตาม web technology ที่ต่างกัน เช่น:
+
+- **PHP** parse เฉพาะพารามิเตอร์ตัวสุดท้าย นี่จะ result ในการค้นหาผู้ใช้สำหรับ carlos
+- **ASP.NET** รวมพารามิเตอร์ทั้งสองตัว นี่จะ result ในการค้นหาผู้ใช้สำหรับ peter,carlos ซึ่งอาจจะ result ใน error message "Invalid username"
+- **Node.js / express** parse เฉพาะพารามิเตอร์ตัวแรก นี่จะ result ในการค้นหาผู้ใช้สำหรับ peter ให้ผลลัพธ์ที่ไม่เปลี่ยน
+
+ถ้าคุณสามารถ override พารามิเตอร์เดิมได้ คุณอาจจะสามารถทำการ exploit ได้ เช่น คุณสามารถเพิ่ม `name=administrator` ใน request นี่อาจจะทำให้คุณ log in เป็น administrator user ได้
+
+![alt text](image-13.png)
+
+![alt text](image-14.png)
+
+![alt text](image-17.png)
+
+![alt text](image-15.png)
+
+![alt text](image-16.png)
+
+![alt text](image-18.png)
+
+## การทดสอบการปนเปื้อนพารามิเตอร์ฝั่งเซิร์ฟเวอร์ใน REST Paths
+
+RESTful API อาจจะวางชื่อพารามิเตอร์และค่าใน URL path แทนที่จะเป็น query string เช่น ลองดู path นี้:
+
+```
+/api/users/123
+```
+
+URL path อาจจะแบ่งออกเป็น:
+- `/api` คือ root API endpoint
+- `/users` แทนทรัพยากร ในกรณีนี้คือ users
+- `/123` แทนพารามิเตอร์ ในที่นี้คือ identifier สำหรับ user เฉพาะ
+
+ลองดูแอปพลิเคชันที่ให้คุณแก้ไข user profiles ตาม username ของพวกเขา requests จะถูกส่งไปยัง endpoint นี้:
+
+```
+GET /edit_profile.php?name=peter
+```
+
+นี่จะ result ใน server-side request นี้:
+
+```
+GET /api/private/users/peter
+```
+
+ผู้โจมตีอาจจะสามารถจัดการ server-side URL path parameters เพื่อ exploit API ในการทดสอบช่องโหว่นี้ ให้เพิ่ม path traversal sequences เพื่อแก้ไขพารามิเตอร์แล้วดูว่าแอปพลิเคชันตอบสนองยังไง
+
+คุณสามารถ submit `peter/../admin` ที่ URL-encoded เป็นค่าของพารามิเตอร์ `name`:
+
+```
+GET /edit_profile.php?name=peter%2f..%2fadmin
+```
+
+นี่อาจจะ result ใน server-side request นี้:
+
+```
+GET /api/private/users/peter/../admin
+```
+
+ถ้า server-side client หรือ back-end API normalize path นี้ มันอาจจะถูก resolve เป็น `/api/private/users/admin`
+
+## การทดสอบการปนเปื้อนพารามิเตอร์ฝั่งเซิร์ฟเวอร์ใน Structured Data Formats
+
+ผู้โจมตีอาจจะสามารถจัดการพารามิเตอร์เพื่อ exploit ช่องโหว่ในการประมวลผล structured data formats อื่นๆ ของเซิร์ฟเวอร์ เช่น JSON หรือ XML ในการทดสอบสิ่งนี้ ให้ inject unexpected structured data เข้าไปใน user inputs แล้วดูว่าเซิร์ฟเวอร์ตอบสนองยังไง
+
+ลองดูแอปพลิเคชันที่ให้ users แก้ไขโปรไฟล์ของพวกเขา แล้วนำการเปลี่ยนแปลงไปใช้ด้วย request ไปยัง server-side API เวลาคุณแก้ไขชื่อของคุณ browser ของคุณจะส่ง request นี้:
+
+```
+POST /myaccount
+name=peter
+```
+
+นี่จะ result ใน server-side request นี้:
+
+```
+PATCH /users/7312/update
+{"name":"peter"}
+```
+
+คุณสามารถลองเพิ่มพารามิเตอร์ `access_level` ใน request แบบนี้:
+
+```
+POST /myaccount
+name=peter","access_level":"administrator
+```
+
+ถ้า user input ถูกเพิ่มลงใน server-side JSON data โดยไม่มี validation หรือ sanitization ที่เพียงพอ นี่จะ result ใน server-side request นี้:
+
+```
+PATCH /users/7312/update
+{"name":"peter","access_level":"administrator"}
+```
+
+นี่อาจจะ result ในการที่ผู้ใช้ peter ได้รับ administrator access
+
+ลองดูตัวอย่างที่คล้ายกัน แต่ client-side user input อยู่ใน JSON data เวลาคุณแก้ไขชื่อของคุณ browser ของคุณจะส่ง request นี้:
+
+```
+POST /myaccount
+{"name": "peter"}
+```
+
+นี่จะ result ใน server-side request นี้:
+
+```
+PATCH /users/7312/update
+{"name":"peter"}
+```
+
+คุณสามารถลองเพิ่มพารามิเตอร์ `access_level` ใน request แบบนี้:
+
+```
+POST /myaccount
+{"name": "peter\",\"access_level\":\"administrator"}
+```
+
+ถ้า user input ถูก decode แล้วเพิ่มลงใน server-side JSON data โดยไม่มี encoding ที่เพียงพอ นี่จะ result ใน server-side request นี้:
+
+```
+PATCH /users/7312/update
+{"name":"peter","access_level":"administrator"}
+```
+
+อีกครั้ง นี่อาจจะ result ในการที่ผู้ใช้ peter ได้รับ administrator access
+
+Structured format injection ยังสามารถเกิดขึ้นใน responses ได้ด้วย เช่น นี่สามารถเกิดขึ้นได้ถ้า user input ถูกเก็บอย่างปลอดภัยใน database แล้วถูก embed ลงใน JSON response จาก back-end API โดยไม่มี encoding ที่เพียงพอ โดยปกติคุณสามารถตรวจจับและ exploit structured format injection ใน responses ในลักษณะเดียวกับที่คุณทำใน requests
+
+**หมายเหตุ:** ตัวอย่างด้านล่างนี้เป็น JSON แต่การปนเปื้อนพารามิเตอร์ฝั่งเซิร์ฟเวอร์สามารถเกิดขึ้นใน structured data format ใดๆ ก็ได้
+
+## การทดสอบด้วย Automated Tools
+
+Burp มี automated tools ที่สามารถช่วยคุณตรวจจับช่องโหว่การปนเปื้อนพารามิเตอร์ฝั่งเซิร์ฟเวอร์
+
+Burp Scanner จะตรวจจับ suspicious input transformations โดยอัตโนมัติเวลาทำการ audit สิ่งเหล่านี้เกิดขึ้นเมื่อแอปพลิเคชันรับ user input แปลงมันในบางวิธี แล้วทำการประมวลผลเพิ่มเติมกับผลลัพธ์ พฤติกรรมนี้ไม่จำเป็นต้องเป็นช่องโหว่ ดังนั้นคุณจะต้องทำการทดสอบเพิ่มเติมโดยใช้เทคนิค manual ที่ระบุไว้ข้างต้น
+
+คุณยังสามารถใช้ Backslash Powered Scanner BApp เพื่อระบุ server-side injection vulnerabilities ได้ scanner จะจัดประเภท inputs เป็น boring, interesting, หรือ vulnerable คุณจะต้องตรวจสอบ interesting inputs โดยใช้เทคนิค manual ที่ระบุไว้ข้างต้น
+
+## การป้องกันการปนเปื้อนพารามิเตอร์ฝั่งเซิร์ฟเวอร์
+
+เพื่อป้องกันการปนเปื้อนพารามิเตอร์ฝั่งเซิร์ฟเวอร์ ให้ใช้ allowlist เพื่อกำหนดตัวอักษรที่ไม่ต้อง encoding และให้แน่ใจว่า user input อื่นๆ ทั้งหมดถูก encode ก่อนที่จะรวมอยู่ใน server-side request คุณยังควรให้แน่ใจว่า input ทั้งหมดเป็นไปตาม expected format และ structure
