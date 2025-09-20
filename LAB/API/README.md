@@ -357,6 +357,16 @@ GET /api/private/users/peter/../admin
 
 ถ้า server-side client หรือ back-end API normalize path นี้ มันอาจจะถูก resolve เป็น `/api/private/users/admin`
 
+![alt text](image-19.png)
+
+![alt text](image-20.png)
+
+![alt text](image-21.png)
+
+![alt text](image-22.png)
+
+![alt text](image-23.png)
+
 ## การทดสอบการปนเปื้อนพารามิเตอร์ฝั่งเซิร์ฟเวอร์ใน Structured Data Formats
 
 ผู้โจมตีอาจจะสามารถจัดการพารามิเตอร์เพื่อ exploit ช่องโหว่ในการประมวลผล structured data formats อื่นๆ ของเซิร์ฟเวอร์ เช่น JSON หรือ XML ในการทดสอบสิ่งนี้ ให้ inject unexpected structured data เข้าไปใน user inputs แล้วดูว่าเซิร์ฟเวอร์ตอบสนองยังไง
@@ -425,13 +435,7 @@ Structured format injection ยังสามารถเกิดขึ้น�
 
 **หมายเหตุ:** ตัวอย่างด้านล่างนี้เป็น JSON แต่การปนเปื้อนพารามิเตอร์ฝั่งเซิร์ฟเวอร์สามารถเกิดขึ้นใน structured data format ใดๆ ก็ได้
 
-## การทดสอบด้วย Automated Tools
 
-Burp มี automated tools ที่สามารถช่วยคุณตรวจจับช่องโหว่การปนเปื้อนพารามิเตอร์ฝั่งเซิร์ฟเวอร์
-
-Burp Scanner จะตรวจจับ suspicious input transformations โดยอัตโนมัติเวลาทำการ audit สิ่งเหล่านี้เกิดขึ้นเมื่อแอปพลิเคชันรับ user input แปลงมันในบางวิธี แล้วทำการประมวลผลเพิ่มเติมกับผลลัพธ์ พฤติกรรมนี้ไม่จำเป็นต้องเป็นช่องโหว่ ดังนั้นคุณจะต้องทำการทดสอบเพิ่มเติมโดยใช้เทคนิค manual ที่ระบุไว้ข้างต้น
-
-คุณยังสามารถใช้ Backslash Powered Scanner BApp เพื่อระบุ server-side injection vulnerabilities ได้ scanner จะจัดประเภท inputs เป็น boring, interesting, หรือ vulnerable คุณจะต้องตรวจสอบ interesting inputs โดยใช้เทคนิค manual ที่ระบุไว้ข้างต้น
 
 ## การป้องกันการปนเปื้อนพารามิเตอร์ฝั่งเซิร์ฟเวอร์
 
